@@ -476,18 +476,26 @@ async def on_message(message: discord.Message):
             await send_log(message.guild, embed=embed, ping_staff=False, ping_user=message.author)
 
     # B) Mass Mention Ping Qoruması
-    mentions = message.mentions
+mentions = message.mentions
     if message.reference and message.reference.cached_message:
         replied_to_user = message.reference.cached_message.author
         mentions = [m for m in mentions if m.id != replied_to_user.id]
 
+    # Burada mass ping üçün şərti 1-dən çox olan pingleşmələrdə tətbiq edirik
     if len(mentions) > 1:
         try:
             await message.delete()
         except:
             pass
-        # DÜZƏLİŞ: 1 saatlıq mute üçün "duration_days=0" və zəmanətli "duration_hours=1" veririk.
-        await punish_user(message.guild, message.author, f"Mesaj daxilində çoxlu ping atmaq ({len(mentions)} nəfər)", duration_days=0, duration_hours=1, remove_roles=False)
+        # DÜZƏLİŞ: Tam olaraq 1 saatlıq mute atır, rolları almır
+        await punish_user(
+            guild=message.guild, 
+            member=message.author, 
+            reason=f"Mesaj daxilində çoxlu ping atmaq ({len(mentions)} nəfər)", 
+            duration_days=0, 
+            duration_hours=1, 
+            remove_roles=False
+        )
         return
 
 
