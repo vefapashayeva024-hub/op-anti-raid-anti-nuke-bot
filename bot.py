@@ -55,11 +55,19 @@ def get_guild_data(guild_id: int):
             "limit_ban": 3,
             "limit_kick": 3,
             "limit_role_delete": 3,
+            "limit_channel_delete": 3, # YENİ: Kanal silmə limiti
             "limit_everyone": 2
         }
         save_all_data(data)
     
-    for key, default_val in [("limit_ban", 3), ("limit_kick", 3), ("limit_role_delete", 3), ("limit_everyone", 2)]:
+    # Əgər köhnə datada yeni limitlər yoxdursa avtomatik əlavə et
+    for key, default_val in [
+        ("limit_ban", 3), 
+        ("limit_kick", 3), 
+        ("limit_role_delete", 3), 
+        ("limit_channel_delete", 3), # YENİ
+        ("limit_everyone", 2)
+    ]:
         if key not in data[guild_key]:
             data[guild_key][key] = default_val
             save_all_data(data)
@@ -91,12 +99,12 @@ class AntiNukeBot(commands.Bot):
         self.ban_counter = {}          
         self.kick_counter = {}         
         self.role_delete_counter = {}  
+        self.channel_delete_counter = {} # YENİ: Kanal silmə sayğacı
         self.everyone_counter = {}     
         self.join_tracker = {}         
 
     async def setup_hook(self):
         load_all_data()
-        # Komanda qruplarını botun tree-sinə əlavə edirik
         self.tree.add_command(whitelist_group)
         self.tree.add_command(staff_group)
         await self.tree.sync()
@@ -128,6 +136,13 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
         min_length=1, 
         max_length=2
     )
+    channel_input = discord.ui.TextInput( # YENİ: Modal pəncərəsinə kanal daxiletmə əlavə olundu
+        label="Kanal Silmə Limiti (60 saniyədə)", 
+        placeholder="Nümunə: 3", 
+        default="3", 
+        min_length=1, 
+        max_length=2
+    )
     everyone_input = discord.ui.TextInput(
         label="@everyone / @here Limiti (60 saniyədə)", 
         placeholder="Nümunə: 2", 
@@ -141,6 +156,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
         self.ban_input.default = str(current_limits.get("limit_ban", 3))
         self.kick_input.default = str(current_limits.get("limit_kick", 3))
         self.role_input.default = str(current_limits.get("limit_role_delete", 3))
+        self.channel_input.default = str(current_limits.get("limit_channel_delete", 3)) # YENİ
         self.everyone_input.default = str(current_limits.get("limit_everyone", 2))
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -148,9 +164,10 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             b_lim = int(self.ban_input.value)
             k_lim = int(self.kick_input.value)
             r_lim = int(self.role_input.value)
+            c_lim = int(self.channel_input.value) # YENİ
             e_lim = int(self.everyone_input.value)
             
-            if b_lim <= 0 or k_lim <= 0 or r_lim <= 0 or e_lim <= 0:
+            if b_lim <= 0 or k_lim <= 0 or r_lim <= 0 or c_lim <= 0 or e_lim <= 0:
                 await interaction.response.send_message("❌ Limit dəyərləri 0-dan böyük olmalıdır!", ephemeral=True)
                 return
                 
@@ -158,6 +175,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             update_guild_data(guild_id, "limit_ban", b_lim)
             update_guild_data(guild_id, "limit_kick", k_lim)
             update_guild_data(guild_id, "limit_role_delete", r_lim)
+            update_guild_data(guild_id, "limit_channel_delete", c_lim) # YENİ
             update_guild_data(guild_id, "limit_everyone", e_lim)
             
             embed = discord.Embed(
@@ -165,10 +183,11 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
                 description="Bu server üçün qorunma limitləri uğurla yadda saxlanıldı!",
                 color=discord.Color.green()
             )
-            embed.add_field(name="Ban Limiti", value=f"{b_lim} dəfə / dəqiqə", inline=True)
-            embed.add_field(name="Kick Limiti", value=f"{k_lim} dəfə / dəqiqə", inline=True)
-            embed.add_field(name="Rol Silmə Limiti", value=f"{r_lim} dəfə / dəqiqə", inline=True)
-            embed.add_field(name="@everyone Limiti", value=f"{e_lim} dəfə / dəqiqə", inline=True)
+            embed.add_field(name="Ban Limiti", value=f"{b_lim} dəfə / dəq", inline=True)
+            embed.add_field(name="Kick Limiti", value=f"{k_lim} dəfə / dəq", inline=True)
+            embed.add_field(name="Rol Silmə Limiti", value=f"{r_lim} dəfə / dəq", inline=True)
+            embed.add_field(name="Kanal Silmə Limiti", value=f"{c_lim} dəfə / dəq", inline=True) # YENİ
+            embed.add_field(name="@everyone Limiti", value=f"{e_lim} dəfə / dəq", inline=True)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
@@ -301,7 +320,7 @@ async def send_log(guild: discord.Guild, embed: discord.Embed, ping_staff: bool 
         await channel.send(content=content_str, embed=embed)
 
 
-# --- SLAŞ KOMANDALARI (Qrup strukturu düzəldildi) ---
+# --- SLAŞ KOMANDALARI ---
 
 whitelist_group = app_commands.Group(name="whitelist", description="Bu server üçün Whitelist komandaları")
 
@@ -384,6 +403,7 @@ async def open_panel(interaction: discord.Interaction):
         f"🔨 **Ban Limiti:** {gdata.get('limit_ban', 3)}/dəq\n"
         f"👢 **Kick Limiti:** {gdata.get('limit_kick', 3)}/dəq\n"
         f"🏷️ **Rol Silmə:** {gdata.get('limit_role_delete', 3)}/dəq\n"
+        f"📁 **Kanal Silmə:** {gdata.get('limit_channel_delete', 3)}/dəq\n" # YENİ
         f"📢 **@everyone:** {gdata.get('limit_everyone', 2)}/dəq"
     )
     embed.add_field(name="📊 Cari Limitlər", value=limit_info, inline=False)
@@ -583,6 +603,46 @@ async def on_guild_role_delete(role: discord.Role):
             await send_log(guild, embed=embed, ping_staff=False, ping_user=moderator)
 
 
+# --- YENİ: KANAL SİLMƏ QORUMASI ---
+@bot.event
+async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
+    guild = channel.guild
+    guild_id = guild.id
+    gdata = get_guild_data(guild_id)
+    if not gdata["is_active"]:
+        return
+
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+        moderator = entry.user
+        if is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        user_key = (guild_id, moderator.id)
+        
+        if user_key not in bot.channel_delete_counter:
+            bot.channel_delete_counter[user_key] = []
+        
+        bot.channel_delete_counter[user_key] = [t for t in bot.channel_delete_counter[user_key] if (now - t).total_seconds() < 60]
+        bot.channel_delete_counter[user_key].append(now)
+
+        cari_say = len(bot.channel_delete_counter[user_key])
+        limit_val = gdata.get("limit_channel_delete", 3)
+
+        if cari_say >= limit_val:
+            # 25 gün timeout atır və bütün idarəçi rollarını alır
+            await punish_user(guild, moderator, f"Ardıcıl {limit_val} kanal silmə limiti aşıldı", duration_days=25, remove_roles=True)
+            bot.channel_delete_counter[user_key].clear()
+        else:
+            qalan = limit_val - cari_say
+            embed = discord.Embed(title="⚠️ WARN (XƏBƏRDARLIQ) - Kanal Silindi", color=discord.Color.orange())
+            embed.add_field(name="Moderator", value=moderator.mention, inline=True)
+            embed.add_field(name="Silinən Kanal", value=channel.name, inline=True)
+            embed.add_field(name="Limit", value=f"{cari_say}/{limit_val} (Qalan: {qalan})", inline=False)
+            
+            await send_log(guild, embed=embed, ping_staff=False, ping_user=moderator)
+
+
 @bot.event
 async def on_member_join(member: discord.Member):
     guild = member.guild
@@ -624,13 +684,5 @@ async def on_member_join(member: discord.Member):
 # --- BOTU VƏ VEB SERVERİ BAŞLATMAQ ---
 keep_alive()
 
-# Render-də təyin etdiyin "TOKEN" adlı mühit dəyişənini oxuyur
-TOKEN = os.environ.get("TOKEN")
-
-if not TOKEN:
-    # Əgər mühit dəyişəni tapılmasa, birbaşa bura yazılan tokeni yoxlayır
-    TOKEN = "BOTA_AİD_TOKENİ_BURA_YAZIN"
-
+TOKEN = os.environ.get("TOKEN", "BOTA_AİD_TOKENİ_BURA_YAZIN")
 bot.run(TOKEN)
-
-
