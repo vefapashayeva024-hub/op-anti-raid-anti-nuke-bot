@@ -55,17 +55,16 @@ def get_guild_data(guild_id: int):
             "limit_ban": 3,
             "limit_kick": 3,
             "limit_role_delete": 3,
-            "limit_channel_delete": 3, # YENİ: Kanal silmə limiti
+            "limit_channel_delete": 3,
             "limit_everyone": 2
         }
         save_all_data(data)
     
-    # Əgər köhnə datada yeni limitlər yoxdursa avtomatik əlavə et
     for key, default_val in [
         ("limit_ban", 3), 
         ("limit_kick", 3), 
         ("limit_role_delete", 3), 
-        ("limit_channel_delete", 3), # YENİ
+        ("limit_channel_delete", 3), 
         ("limit_everyone", 2)
     ]:
         if key not in data[guild_key]:
@@ -99,7 +98,7 @@ class AntiNukeBot(commands.Bot):
         self.ban_counter = {}          
         self.kick_counter = {}         
         self.role_delete_counter = {}  
-        self.channel_delete_counter = {} # YENİ: Kanal silmə sayğacı
+        self.channel_delete_counter = {} 
         self.everyone_counter = {}     
         self.join_tracker = {}         
 
@@ -136,7 +135,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
         min_length=1, 
         max_length=2
     )
-    channel_input = discord.ui.TextInput( # YENİ: Modal pəncərəsinə kanal daxiletmə əlavə olundu
+    channel_input = discord.ui.TextInput(
         label="Kanal Silmə Limiti (60 saniyədə)", 
         placeholder="Nümunə: 3", 
         default="3", 
@@ -156,7 +155,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
         self.ban_input.default = str(current_limits.get("limit_ban", 3))
         self.kick_input.default = str(current_limits.get("limit_kick", 3))
         self.role_input.default = str(current_limits.get("limit_role_delete", 3))
-        self.channel_input.default = str(current_limits.get("limit_channel_delete", 3)) # YENİ
+        self.channel_input.default = str(current_limits.get("limit_channel_delete", 3))
         self.everyone_input.default = str(current_limits.get("limit_everyone", 2))
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -164,7 +163,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             b_lim = int(self.ban_input.value)
             k_lim = int(self.kick_input.value)
             r_lim = int(self.role_input.value)
-            c_lim = int(self.channel_input.value) # YENİ
+            c_lim = int(self.channel_input.value)
             e_lim = int(self.everyone_input.value)
             
             if b_lim <= 0 or k_lim <= 0 or r_lim <= 0 or c_lim <= 0 or e_lim <= 0:
@@ -175,7 +174,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             update_guild_data(guild_id, "limit_ban", b_lim)
             update_guild_data(guild_id, "limit_kick", k_lim)
             update_guild_data(guild_id, "limit_role_delete", r_lim)
-            update_guild_data(guild_id, "limit_channel_delete", c_lim) # YENİ
+            update_guild_data(guild_id, "limit_channel_delete", c_lim)
             update_guild_data(guild_id, "limit_everyone", e_lim)
             
             embed = discord.Embed(
@@ -186,7 +185,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             embed.add_field(name="Ban Limiti", value=f"{b_lim} dəfə / dəq", inline=True)
             embed.add_field(name="Kick Limiti", value=f"{k_lim} dəfə / dəq", inline=True)
             embed.add_field(name="Rol Silmə Limiti", value=f"{r_lim} dəfə / dəq", inline=True)
-            embed.add_field(name="Kanal Silmə Limiti", value=f"{c_lim} dəfə / dəq", inline=True) # YENİ
+            embed.add_field(name="Kanal Silmə Limiti", value=f"{c_lim} dəfə / dəq", inline=True)
             embed.add_field(name="@everyone Limiti", value=f"{e_lim} dəfə / dəq", inline=True)
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -263,7 +262,8 @@ def is_whitelisted(guild_id: int, user_id: int) -> bool:
     gdata = get_guild_data(guild_id)
     return user_id in gdata["whitelist"]
 
-async def punish_user(guild: discord.Guild, member: discord.Member, reason: str, duration_days: int = 25, remove_roles: bool = True):
+# DÜZƏLİŞ: duration_hours parametri əlavə edildi ki, 1 saatlıq səssizlik dəqiq işləsin
+async def punish_user(guild: discord.Guild, member: discord.Member, reason: str, duration_days: int = 25, duration_hours: int = 0, remove_roles: bool = True):
     if member.id == DEVELOPER_ID or member.id == guild.owner_id or is_whitelisted(guild.id, member.id):
         return
 
@@ -278,7 +278,8 @@ async def punish_user(guild: discord.Guild, member: discord.Member, reason: str,
             print(f"Rollar alınarkən xəta: {e}")
 
     try:
-        duration = datetime.timedelta(days=duration_days) if duration_days > 0 else datetime.timedelta(hours=1)
+        # Düzəliş: Gün və saat dəyərlərini birləşdirərək tam vaxt hesablayır
+        duration = datetime.timedelta(days=duration_days, hours=duration_hours)
         await member.timeout(duration, reason=f"Anti-Nuke: {reason}")
     except Exception as e:
         print(f"Timeout xətası: {e}")
@@ -403,8 +404,8 @@ async def open_panel(interaction: discord.Interaction):
         f"🔨 **Ban Limiti:** {gdata.get('limit_ban', 3)}/dəq\n"
         f"👢 **Kick Limiti:** {gdata.get('limit_kick', 3)}/dəq\n"
         f"🏷️ **Rol Silmə:** {gdata.get('limit_role_delete', 3)}/dəq\n"
-        f"📁 **Kanal Silmə:** {gdata.get('limit_channel_delete', 3)}/dəq\n" # YENİ
-        f"📢 **@everyone:** {gdata.get('limit_everyone', 2)}/dəq"
+        f"📁 **Kanal Silmə:** {gdata.get('limit_channel_delete', 3)}/dəq\n"
+        f"📢 ****@everyone:** {gdata.get('limit_everyone', 2)}/dəq"
     )
     embed.add_field(name="📊 Cari Limitlər", value=limit_info, inline=False)
     
@@ -459,7 +460,7 @@ async def on_message(message: discord.Message):
                 await message.delete()
             except:
                 pass
-            await punish_user(message.guild, message.author, "Sürətli @everyone/@here limitini aşmaq", duration_days=25, remove_roles=True)
+            await punish_user(message.guild, message.author, "Sürətli @everyone/@here limitini aşmaq", duration_days=25, duration_hours=0, remove_roles=True)
             bot.everyone_counter[user_key].clear()
             return
         else:
@@ -485,7 +486,8 @@ async def on_message(message: discord.Message):
             await message.delete()
         except:
             pass
-        await punish_user(message.guild, message.author, f"Mesaj daxilində çoxlu ping atmaq ({len(mentions)} nəfər)", duration_days=0, remove_roles=False)
+        # DÜZƏLİŞ: 1 saatlıq mute üçün "duration_days=0" və zəmanətli "duration_hours=1" veririk.
+        await punish_user(message.guild, message.author, f"Mesaj daxilində çoxlu ping atmaq ({len(mentions)} nəfər)", duration_days=0, duration_hours=1, remove_roles=False)
         return
 
 
@@ -514,7 +516,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         limit_val = gdata.get("limit_ban", 3)
 
         if cari_say >= limit_val:
-            await punish_user(guild, moderator, f"Ardıcıl {limit_val} nəfəri banlama limiti aşıldı", duration_days=25, remove_roles=True)
+            await punish_user(guild, moderator, f"Ardıcıl {limit_val} nəfəri banlama limiti aşıldı", duration_days=25, duration_hours=0, remove_roles=True)
             bot.ban_counter[user_key].clear()
         else:
             qalan = limit_val - cari_say
@@ -553,7 +555,7 @@ async def on_member_remove(member: discord.Member):
             limit_val = gdata.get("limit_kick", 3)
 
             if cari_say >= limit_val:
-                await punish_user(guild, moderator, f"Ardıcıl {limit_val} nəfəri kickləmə limiti aşıldı", duration_days=25, remove_roles=True)
+                await punish_user(guild, moderator, f"Ardıcıl {limit_val} nəfəri kickləmə limiti aşıldı", duration_days=25, duration_hours=0, remove_roles=True)
                 bot.kick_counter[user_key].clear()
             else:
                 qalan = limit_val - cari_say
@@ -591,7 +593,7 @@ async def on_guild_role_delete(role: discord.Role):
         limit_val = gdata.get("limit_role_delete", 3)
 
         if cari_say >= limit_val:
-            await punish_user(guild, moderator, f"Ardıcıl {limit_val} rol silmə limiti aşıldı", duration_days=25, remove_roles=True)
+            await punish_user(guild, moderator, f"Ardıcıl {limit_val} rol silmə limiti aşıldı", duration_days=25, duration_hours=0, remove_roles=True)
             bot.role_delete_counter[user_key].clear()
         else:
             qalan = limit_val - cari_say
@@ -603,7 +605,6 @@ async def on_guild_role_delete(role: discord.Role):
             await send_log(guild, embed=embed, ping_staff=False, ping_user=moderator)
 
 
-# --- YENİ: KANAL SİLMƏ QORUMASI ---
 @bot.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
     guild = channel.guild
@@ -630,8 +631,7 @@ async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
         limit_val = gdata.get("limit_channel_delete", 3)
 
         if cari_say >= limit_val:
-            # 25 gün timeout atır və bütün idarəçi rollarını alır
-            await punish_user(guild, moderator, f"Ardıcıl {limit_val} kanal silmə limiti aşıldı", duration_days=25, remove_roles=True)
+            await punish_user(guild, moderator, f"Ardıcıl {limit_val} kanal silmə limiti aşıldı", duration_days=25, duration_hours=0, remove_roles=True)
             bot.channel_delete_counter[user_key].clear()
         else:
             qalan = limit_val - cari_say
@@ -660,7 +660,7 @@ async def on_member_join(member: discord.Member):
                 except Exception as e:
                     print(f"Bot banlana bilmədi: {e}")
                 
-                await punish_user(guild, inviter, f"Servere icazəsiz bot əlavə etdi ({member.name})", duration_days=25, remove_roles=True)
+                await punish_user(guild, inviter, f"Servere icazəsiz bot əlavə etdi ({member.name})", duration_days=25, duration_hours=0, remove_roles=True)
                 return
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -673,7 +673,7 @@ async def on_member_join(member: discord.Member):
     if len(bot.join_tracker[guild_id]) > 10:
         embed = discord.Embed(
             title="🚨 TƏCİLİ: RAID SİQNALI!",
-            description="Serverə son 10 saniyədə 10-dan çox yeni hesab daxil oldu. Raid hücumu baş vermiş ola bilər!",
+            description="Serverə son 10 saniyədə 10-dan çox yeni hesab daxil oldu. Raid hücumu baş vermiş ola mir!",
             color=discord.Color.red()
         )
         embed.set_footer(text="Qoruyucu heyət dərhal serveri yoxlamalıdır.")
