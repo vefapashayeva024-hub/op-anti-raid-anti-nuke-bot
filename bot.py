@@ -47,7 +47,6 @@ def get_guild_data(guild_id: int):
     guild_key = str(guild_id)
     
     if guild_key not in data:
-        # Yeni serverlər üçün siyahılar tamamilə boş başlayır
         data[guild_key] = {
             "whitelist": [],
             "notification_roles": [],
@@ -60,7 +59,6 @@ def get_guild_data(guild_id: int):
         }
         save_all_data(data)
     
-    # Hər hansı bir köhnə datada limitlər əskikdirsə tamamla
     for key, default_val in [("limit_ban", 3), ("limit_kick", 3), ("limit_role_delete", 3), ("limit_everyone", 2)]:
         if key not in data[guild_key]:
             data[guild_key][key] = default_val
@@ -98,6 +96,9 @@ class AntiNukeBot(commands.Bot):
 
     async def setup_hook(self):
         load_all_data()
+        # Komanda qruplarını botun tree-sinə əlavə edirik
+        self.tree.add_command(whitelist_group)
+        self.tree.add_command(staff_group)
         await self.tree.sync()
 
 bot = AntiNukeBot()
@@ -183,7 +184,6 @@ class ControlPanelView(discord.ui.View):
 
     @discord.ui.button(label="Sistemi Aktiv Et", style=discord.ButtonStyle.success, emoji="🛡️", custom_id="btn_activate")
     async def activate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Qurucu və ya Admin icazəsi yoxlanılır
         if interaction.user.id != DEVELOPER_ID and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Bu düyməni yalnız İdarəçilər istifadə edə bilər!", ephemeral=True)
             return
@@ -226,8 +226,6 @@ class ControlPanelView(discord.ui.View):
     @discord.ui.button(label="Whitelist Göstər", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="btn_whitelist")
     async def whitelist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         gdata = get_guild_data(interaction.guild_id)
-        
-        # Siyahıda olan ID-ləri göstər, əgər boşdursa bildiriş ver
         users_mentions = [f"<@{uid}> (`{uid}`)" for uid in gdata["whitelist"]]
         
         embed = discord.Embed(
@@ -241,14 +239,12 @@ class ControlPanelView(discord.ui.View):
 # --- KÖMƏKÇİ FUNKSİYALAR ---
 
 def is_whitelisted(guild_id: int, user_id: int) -> bool:
-    # Əgər hərəkəti edən şəxs sənsənsə (DEVELOPER), birbaşa True qaytarır və cəzalandırmır
     if user_id == DEVELOPER_ID:
         return True
     gdata = get_guild_data(guild_id)
     return user_id in gdata["whitelist"]
 
 async def punish_user(guild: discord.Guild, member: discord.Member, reason: str, duration_days: int = 25, remove_roles: bool = True):
-    # Sən (DEVELOPER) və server sahibi heç bir halda cəzalana bilməzsiniz
     if member.id == DEVELOPER_ID or member.id == guild.owner_id or is_whitelisted(guild.id, member.id):
         return
 
@@ -305,12 +301,9 @@ async def send_log(guild: discord.Guild, embed: discord.Embed, ping_staff: bool 
         await channel.send(content=content_str, embed=embed)
 
 
-# --- SLAŞ KOMANDALARI ---
+# --- SLAŞ KOMANDALARI (Qrup strukturu düzəldildi) ---
 
-@bot.tree.group(name="whitelist", description="Bu server üçün Whitelist komandaları")
-@app_commands.guild_only()
-async def whitelist_group(interaction: discord.Interaction):
-    pass
+whitelist_group = app_commands.Group(name="whitelist", description="Bu server üçün Whitelist komandaları")
 
 @whitelist_group.command(name="add", description="Bir istifadəçini whitelist-ə əlavə edir.")
 @app_commands.checks.has_permissions(administrator=True)
@@ -341,10 +334,7 @@ async def wl_remove(interaction: discord.Interaction, user: discord.User):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.group(name="staffrole", description="Anti-nuke bildirişi alacaq server rəhbərliyi rolları")
-@app_commands.guild_only()
-async def staff_group(interaction: discord.Interaction):
-    pass
+staff_group = app_commands.Group(name="staffrole", description="Anti-nuke bildirişi alacaq server rəhbərliyi rolları")
 
 @staff_group.command(name="add", description="Cəza anında pinglənəcək rolu əlavə edir.")
 @app_commands.checks.has_permissions(administrator=True)
@@ -636,3 +626,5 @@ keep_alive()
 
 TOKEN = "BOTA_AİD_TOKENİ_BURA_YAZIN"
 bot.run(TOKEN)
+
+
