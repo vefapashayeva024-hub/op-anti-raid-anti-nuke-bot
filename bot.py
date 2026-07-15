@@ -3,10 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import datetime
 import os
-import pymongo  # MongoDB üçün lazımdır
-import certifi  # SSL/TLS sertifikat xətalarını düzəltmək üçün mütləqdir
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
+import pymysql  # Aiven MySQL / MariaDB qoşulması üçün
 from flask import Flask
 from threading import Thread
 
@@ -18,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home(): 
-    return "Bot Render uzerinde aktivdir!"
+    return "Bot Aiven MySQL bazası ilə Render üzərində aktivdir!"
 
 def run(): 
     port = int(os.environ.get("PORT", 8080))
@@ -27,89 +24,147 @@ def run():
 def keep_alive(): 
     Thread(target=run).start()
 
-# --- MONGODB BAĞLANTISI (ENVİRONS VASİTƏSİLƏ) ---
-# Həm MONGO_URI, həm də ehtiyat olaraq MONGO_URL dəyişənini yoxlayır
-MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGO_URL")
-
-if not MONGO_URI:
-    print("❌ XƏTA: Render panelində MONGO_URI ətraf mühit dəyişəni (Environment Variable) tapılmadı!")
-    collection = None
-else:
+# --- AIVEN MYSQL BAĞLANTISI ---
+def get_db_connection():
     try:
-        # MongoDB-nin tövsiyə etdiyi ServerApi və certifi ilə təhlükəsiz qoşulma qururuq
-        mongo_client = MongoClient(
-            MONGO_URI,
-            server_api=ServerApi('1'),
-            tlsCAFile=certifi.where(),
-            tlsAllowInvalidCertificates=True  # SSL sertifikat xətalarını tamamilə keçmək üçün
+        connection = pymysql.connect(
+            host=os.environ.get("MYSQL_HOST"),
+            user=os.environ.get("MYSQL_USER"),
+            password=os.environ.get("MYSQL_PASSWORD"),
+            database=os.environ.get("MYSQL_DATABASE"),
+            port=int(os.environ.get("MYSQL_PORT", 3306)),
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+            ssl={"ssl": {}}  # Aiven mütləq SSL tələb edir
         )
-        db = mongo_client["anti_nuke_database"]
-        collection = db["guild_settings"]
-        
-        # Qoşulmanı test etmək üçün ping göndəririk
-        mongo_client.admin.command('ping')
-        print("✅ Pinged your deployment. MongoDB-yə uğurla qoşulduq!")
+        return connection
     except Exception as e:
-        print(f"❌ Verilənlər bazasına qoşularkən xəta baş verdi: {e}")
-        collection = None
+        print(f"❌ Aiven MySQL-ə qoşularkən xəta baş verdi: {e}")
+        return None
 
-# --- MULTI-SERVER MONGODB FUNKSİYALARI ---
+# --- TABEL YARADILMASI (Cədvəllər yoxdursa avtomatik yaradır) ---
+def init_db():
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                # Server parametrləri cədvəli
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_settings (
+                        guild_id VARCHAR(50) PRIMARY KEY,
+                        log_channel_id VARCHAR(50) DEFAULT NULL,
+                        is_active BOOLEAN DEFAULT FALSE,
+                        limit_ban INT DEFAULT 3,
+                        limit_kick INT DEFAULT 3,
+                        limit_role_delete INT DEFAULT 3,
+                        limit_channel_delete INT DEFAULT 3,
+                        limit_everyone INT DEFAULT 2
+                    )
+                """)
+                # Whitelist istifadəçiləri cədvəli
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_whitelist (
+                        guild_id VARCHAR(50),
+                        user_id VARCHAR(50),
+                        PRIMARY KEY (guild_id, user_id)
+                    )
+                """)
+                # Bildiriş alacaq rəhbərlik rolları cədvəli
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_notification_roles (
+                        guild_id VARCHAR(50),
+                        role_id VARCHAR(50),
+                        PRIMARY KEY (guild_id, role_id)
+                    )
+                """)
+            print("✅ Aiven MySQL Cədvəlləri uğurla yoxlanıldı/yaradıldı!")
+        except Exception as e:
+            print(f"❌ Cədvəllər yaradılanda xəta: {e}")
+        finally:
+            conn.close()
+
+# Verilənlər bazasını yoxlayaq
+init_db()
+
+# --- MULTI-SERVER MYSQL FUNKSİYALARI ---
 
 def get_guild_data(guild_id: int):
     guild_key = str(guild_id)
-    if collection is None:
-        print("⚠️ Database aktiv deyil! Default parametrlər qaytarılır.")
-        return {
-            "guild_id": guild_key, "whitelist": [], "notification_roles": [], 
-            "log_channel_id": None, "is_active": False, "limit_ban": 3, 
-            "limit_kick": 3, "limit_role_delete": 3, "limit_channel_delete": 3, "limit_everyone": 2
-        }
-        
-    data = collection.find_one({"guild_id": guild_key})
+    conn = get_db_connection()
     
-    if not data:
-        default_data = {
-            "guild_id": guild_key,
-            "whitelist": [],
-            "notification_roles": [],
-            "log_channel_id": None,
-            "is_active": False,
-            "limit_ban": 3,
-            "limit_kick": 3,
-            "limit_role_delete": 3,
-            "limit_channel_delete": 3,
-            "limit_everyone": 2
-        }
-        collection.insert_one(default_data)
+    default_data = {
+        "guild_id": guild_key, "whitelist": [], "notification_roles": [], 
+        "log_channel_id": None, "is_active": False, "limit_ban": 3, 
+        "limit_kick": 3, "limit_role_delete": 3, "limit_channel_delete": 3, "limit_everyone": 2
+    }
+    
+    if not conn:
         return default_data
-    
-    updated = False
-    for key, default_val in [
-        ("limit_ban", 3), 
-        ("limit_kick", 3), 
-        ("limit_role_delete", 3), 
-        ("limit_channel_delete", 3), 
-        ("limit_everyone", 2)
-    ]:
-        if key not in data:
-            data[key] = default_val
-            updated = True
+
+    try:
+        with conn.cursor() as cursor:
+            # 1. Server əsas parametrlərini çəkirik
+            cursor.execute("SELECT * FROM guild_settings WHERE guild_id = %s", (guild_key,))
+            row = cursor.fetchone()
             
-    if updated:
-        collection.replace_one({"guild_id": guild_key}, data)
+            if not row:
+                cursor.execute("INSERT INTO guild_settings (guild_id) VALUES (%s)", (guild_key,))
+                row = {
+                    "guild_id": guild_key, "log_channel_id": None, "is_active": False,
+                    "limit_ban": 3, "limit_kick": 3, "limit_role_delete": 3,
+                    "limit_channel_delete": 3, "limit_everyone": 2
+                }
             
-    return data
+            data = {
+                "guild_id": row["guild_id"],
+                "log_channel_id": int(row["log_channel_id"]) if row["log_channel_id"] else None,
+                "is_active": bool(row["is_active"]),
+                "limit_ban": row["limit_ban"],
+                "limit_kick": row["limit_kick"],
+                "limit_role_delete": row["limit_role_delete"],
+                "limit_channel_delete": row["limit_channel_delete"],
+                "limit_everyone": row["limit_everyone"],
+                "whitelist": [],
+                "notification_roles": []
+            }
+            
+            # 2. Whitelist siyahısını çəkirik
+            cursor.execute("SELECT user_id FROM guild_whitelist WHERE guild_id = %s", (guild_key,))
+            data["whitelist"] = [int(r["user_id"]) for r in cursor.fetchall()]
+            
+            # 3. Bildiriş rollarını çəkirik
+            cursor.execute("SELECT role_id FROM guild_notification_roles WHERE guild_id = %s", (guild_key,))
+            data["notification_roles"] = [int(r["role_id"]) for r in cursor.fetchall()]
+            
+            return data
+    except Exception as e:
+        print(f"⚠️ Məlumat çəkilərkən xəta: {e}")
+        return default_data
+    finally:
+        conn.close()
 
 def update_guild_data(guild_id: int, key: str, value):
-    if collection is None:
-        print("⚠️ Database aktiv olmadığı üçün məlumat yadda saxlanıla bilmədi!")
+    conn = get_db_connection()
+    if not conn:
         return
+    
     guild_key = str(guild_id)
-    collection.update_one(
-        {"guild_id": guild_key},
-        {"$set": {key: value}},
-        upsert=True
-    )
+    try:
+        with conn.cursor() as cursor:
+            if key == "whitelist":
+                cursor.execute("DELETE FROM guild_whitelist WHERE guild_id = %s", (guild_key,))
+                for user_id in value:
+                    cursor.execute("INSERT INTO guild_whitelist (guild_id, user_id) VALUES (%s, %s)", (guild_key, str(user_id)))
+            elif key == "notification_roles":
+                cursor.execute("DELETE FROM guild_notification_roles WHERE guild_id = %s", (guild_key,))
+                for role_id in value:
+                    cursor.execute("INSERT INTO guild_notification_roles (guild_id, role_id) VALUES (%s, %s)", (guild_key, str(role_id)))
+            else:
+                cursor.execute(f"UPDATE guild_settings SET {key} = %s WHERE guild_id = %s", (value, guild_key))
+    except Exception as e:
+        print(f"⚠️ Verilənlər bazası yenilənərkən xəta: {e}")
+    finally:
+        conn.close()
 
 
 intents = discord.Intents.default()
@@ -538,39 +593,59 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_member_ban(guild: discord.Guild, user: discord.User):
-    guild_id = guild.id
-    gdata = get_guild_data(guild_id)
-    if not gdata["is_active"]:
+    # 1. Sistem aktivdirmi deyə yoxlayırıq
+    gdata = get_guild_data(guild.id)
+    if not gdata.get("is_active"):
         return
 
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
-        moderator = entry.user
-        if is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
-            return
+    # 2. Banı kimin atdığını tapmaq üçün Audit Log-a baxırıq
+    moderator = None
+    try:
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+            if entry.target.id == user.id:
+                moderator = entry.user
+                break
+    except Exception as e:
+        print(f"⚠️ Audit log oxunarkən xəta baş verdi: {e}")
+        return
 
-        now = datetime.datetime.now(datetime.timezone.utc)
-        user_key = (guild_id, moderator.id)
+    # Tapılmadısa və ya botun özüdürsə, dayanırıq
+    if not moderator or moderator.id == bot.user.id:
+        return
+
+    # 3. Moderator toxunulmazdırsa (sahib, dev, whitelist), keçirik
+    if moderator.id == guild.owner_id or moderator.id == DEVELOPER_ID or is_whitelisted(guild.id, moderator.id):
+        return
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    key = (guild.id, moderator.id)
+
+    # 4. Ban sayğacını yaradırıq/yeniləyirik
+    if key not in bot.ban_counter:
+        bot.ban_counter[key] = []
+
+    # Son 60 saniyədən köhnə qeydləri təmizləyirik
+    bot.ban_counter[key] = [
+        t for t in bot.ban_counter[key]
+        if (now - t).total_seconds() < 60
+    ]
+
+    # Yeni banın vaxtını siyahıya əlavə edirik
+    bot.ban_counter[key].append(now)
+
+    # 5. Limiti yoxlayırıq və aşılarsa cəzalandırırıq (unban yoxdur)
+    limit = gdata.get("limit_ban", 3)
+    if len(bot.ban_counter[key]) >= limit:
+        member = guild.get_member(moderator.id)
+        if member:
+            await punish_user(
+                guild=guild, 
+                member=member, 
+                reason=f"Limit aşımı (60 saniyədə {len(bot.ban_counter[key])} ban atıldı!)"
+            )
         
-        if user_key not in bot.ban_counter:
-            bot.ban_counter[user_key] = []
-        
-        bot.ban_counter[user_key] = [t for t in bot.ban_counter[user_key] if (now - t).total_seconds() < 60]
-        bot.ban_counter[user_key].append(now)
-
-        cari_say = len(bot.ban_counter[user_key])
-        limit_val = gdata.get("limit_ban", 3)
-
-        if cari_say >= limit_val:
-            await punish_user(guild, moderator, f"Ardıcıl {limit_val} nəfəri banlama limiti aşıldı", duration_days=25, duration_hours=0, remove_roles=True)
-            bot.ban_counter[user_key].clear()
-        else:
-            qalan = limit_val - cari_say
-            embed = discord.Embed(title="⚠️ WARN (XƏBƏRDARLIQ) - Ban Limiti", color=discord.Color.orange())
-            embed.add_field(name="Moderator", value=moderator.mention, inline=True)
-            embed.add_field(name="Həyata Keçən Ban", value=f"{cari_say}/{limit_val}", inline=True)
-            embed.add_field(name="Qalan Haqqı", value=f"{qalan} ban", inline=True)
-            
-            await send_log(guild, embed=embed, ping_staff=False, ping_user=moderator)
+        # Sayğacı sıfırlayırıq
+        bot.ban_counter[key] = []
 
 
 @bot.event
@@ -718,7 +793,7 @@ async def on_member_join(member: discord.Member):
     if len(bot.join_tracker[guild_id]) > 10:
         embed = discord.Embed(
             title="🚨 TƏCİLİ: RAID SİQNALI!",
-            description="Serverə son 10 saniyədə 10-dan çox yeni hesab daxil oldu. Raid hücumu baş vermiş ola birər!",
+            description="Serverə son 10 saniyədə 10-dan çox yeni hesab daxil oldu. Raid hücumu baş vermiş ola bilər!",
             color=discord.Color.red()
         )
         embed.set_footer(text="Qoruyucu heyət dərhal serveri yoxlamalıdır.")
@@ -729,5 +804,8 @@ async def on_member_join(member: discord.Member):
 # --- BOTU VƏ VEB SERVERİ BAŞLATMAQ ---
 keep_alive()
 
-TOKEN = os.environ.get("TOKEN", "BOTA_AİD_TOKENİ_BURA_YAZIN")
-bot.run(TOKEN)
+TOKEN = os.environ.get("TOKEN")
+if not TOKEN:
+    print("❌ XƏTA: Render panelində TOKEN ətraf mühit dəyişəni (Environment Variable) tapılmadı!")
+else:
+    bot.run(TOKEN)
