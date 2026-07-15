@@ -3,7 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 import datetime
 import os
-import pymysql  # Aiven MySQL / MariaDB qoşulması üçün
+import psycopg2  # PostgreSQL qoşulması üçün
+from psycopg2.extras import RealDictCursor
 from flask import Flask
 from threading import Thread
 
@@ -15,7 +16,7 @@ app = Flask('')
 
 @app.route('/')
 def home(): 
-    return "Bot Aiven MySQL bazası ilə Render üzərində aktivdir!"
+    return "Bot PostgreSQL bazası ilə Render üzərində aktivdir!"
 
 def run(): 
     port = int(os.environ.get("PORT", 8080))
@@ -24,25 +25,23 @@ def run():
 def keep_alive(): 
     Thread(target=run).start()
 
-# --- AIVEN MYSQL BAĞLANTISI ---
+# --- POSTGRESQL BAĞLANTISI ---
 def get_db_connection():
     try:
-        connection = pymysql.connect(
-            host=os.environ.get("MYSQL_HOST"),
-            user=os.environ.get("MYSQL_USER"),
-            password=os.environ.get("MYSQL_PASSWORD"),
-            database=os.environ.get("MYSQL_DATABASE"),
-            port=int(os.environ.get("MYSQL_PORT", 3306)),
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=True,
-            ssl={"ssl": {}}  # Aiven mütləq SSL tələb edir
+        connection = psycopg2.connect(
+            host=os.environ.get("PGHOST"),
+            user=os.environ.get("PGUSER"),
+            password=os.environ.get("PGPASSWORD"),
+            database=os.environ.get("PGDATABASE"),
+            port=int(os.environ.get("PGPORT", 5432)),
+            cursor_factory=RealDictCursor  # Məlumatları dict formasında almaq üçün
         )
         return connection
     except Exception as e:
-        print(f"❌ Aiven MySQL-ə qoşularkən xəta baş verdi: {e}")
+        print(f"❌ PostgreSQL-ə qoşularkən xəta baş verdi: {e}")
         return None
 
-# --- TABEL YARADILMASI (Cədvəllər yoxdursa avtomatik yaradır) ---
+# --- TABEL YARADILMASI (PostgreSQL formatında) ---
 def init_db():
     conn = get_db_connection()
     if conn:
@@ -77,7 +76,8 @@ def init_db():
                         PRIMARY KEY (guild_id, role_id)
                     )
                 """)
-            print("✅ Aiven MySQL Cədvəlləri uğurla yoxlanıldı/yaradıldı!")
+                conn.commit()
+            print("✅ PostgreSQL Cədvəlləri uğurla yoxlanıldı/yaradıldı!")
         except Exception as e:
             print(f"❌ Cədvəllər yaradılanda xəta: {e}")
         finally:
@@ -86,7 +86,7 @@ def init_db():
 # Verilənlər bazasını yoxlayaq
 init_db()
 
-# --- MULTI-SERVER MYSQL FUNKSİYALARI ---
+# --- MULTI-SERVER POSTGRESQL FUNKSİYALARI ---
 
 def get_guild_data(guild_id: int):
     guild_key = str(guild_id)
@@ -109,6 +109,7 @@ def get_guild_data(guild_id: int):
             
             if not row:
                 cursor.execute("INSERT INTO guild_settings (guild_id) VALUES (%s)", (guild_key,))
+                conn.commit()
                 row = {
                     "guild_id": guild_key, "log_channel_id": None, "is_active": False,
                     "limit_ban": 3, "limit_kick": 3, "limit_role_delete": 3,
@@ -161,6 +162,7 @@ def update_guild_data(guild_id: int, key: str, value):
                     cursor.execute("INSERT INTO guild_notification_roles (guild_id, role_id) VALUES (%s, %s)", (guild_key, str(role_id)))
             else:
                 cursor.execute(f"UPDATE guild_settings SET {key} = %s WHERE guild_id = %s", (value, guild_key))
+            conn.commit()
     except Exception as e:
         print(f"⚠️ Verilənlər bazası yenilənərkən xəta: {e}")
     finally:
@@ -593,12 +595,12 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_member_ban(guild: discord.Guild, user: discord.User):
-    # 1. Sistem aktivdirmi deyə yoxlayırıq
+    # 1. Sistem aktivdirmi yoxlayırıq
     gdata = get_guild_data(guild.id)
     if not gdata.get("is_active"):
         return
 
-    # 2. Banı kimin atdığını tapmaq üçün Audit Log-a baxırıq
+    # 2. Banı kimin atdığını tapmaq üçün Audit Log-u çəkirik
     moderator = None
     try:
         async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
@@ -606,34 +608,32 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
                 moderator = entry.user
                 break
     except Exception as e:
-        print(f"⚠️ Audit log oxunarkən xəta baş verdi: {e}")
+        print(f"⚠️ Audit log oxunarkən xəta: {e}")
         return
 
-    # Tapılmadısa və ya botun özüdürsə, dayanırıq
     if not moderator or moderator.id == bot.user.id:
         return
 
-    # 3. Moderator toxunulmazdırsa (sahib, dev, whitelist), keçirik
+    # 3. İdarəçi, dev və ya whitelist-dirsə toxunmuruq
     if moderator.id == guild.owner_id or moderator.id == DEVELOPER_ID or is_whitelisted(guild.id, moderator.id):
         return
 
     now = datetime.datetime.now(datetime.timezone.utc)
     key = (guild.id, moderator.id)
 
-    # 4. Ban sayğacını yaradırıq/yeniləyirik
     if key not in bot.ban_counter:
         bot.ban_counter[key] = []
 
-    # Son 60 saniyədən köhnə qeydləri təmizləyirik
+    # Son 60 saniyədən köhnələri təmizləyirik
     bot.ban_counter[key] = [
         t for t in bot.ban_counter[key]
         if (now - t).total_seconds() < 60
     ]
 
-    # Yeni banın vaxtını siyahıya əlavə edirik
+    # Cari banı əlavə edirik
     bot.ban_counter[key].append(now)
 
-    # 5. Limiti yoxlayırıq və aşılarsa cəzalandırırıq (unban yoxdur)
+    # 5. Limiti yoxlayırıq
     limit = gdata.get("limit_ban", 3)
     if len(bot.ban_counter[key]) >= limit:
         member = guild.get_member(moderator.id)
@@ -644,7 +644,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
                 reason=f"Limit aşımı (60 saniyədə {len(bot.ban_counter[key])} ban atıldı!)"
             )
         
-        # Sayğacı sıfırlayırıq
+        # Sayğacı təmizləyirik
         bot.ban_counter[key] = []
 
 
@@ -806,6 +806,6 @@ keep_alive()
 
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
-    print("❌ XƏTA: Render panelində TOKEN ətraf mühit dəyişəni (Environment Variable) tapılmadı!")
+    print("❌ XƏTA: Render panelində TOKEN ətraf mühit dəyişəni tapılmadı!")
 else:
     bot.run(TOKEN)
