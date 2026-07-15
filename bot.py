@@ -25,7 +25,6 @@ def run():
 def keep_alive(): 
     Thread(target=run).start()
 
-# --- POSTGRESQL BAĞLANTISI ---
 # --- POSTGRESQL BAĞLANTISI (Aiven-ə Uyğun) ---
 def get_db_connection():
     try:
@@ -35,7 +34,7 @@ def get_db_connection():
             password=os.environ.get("PGPASSWORD"),
             database=os.environ.get("PGDATABASE"),
             port=int(os.environ.get("PGPORT", 5432)),
-            sslmode="require",  # Aiven SSL rejimini mütləq tələb edir
+            sslmode="require",  # Aiven SSL mütləq tələb edir
             cursor_factory=RealDictCursor  # Məlumatları dict formasında almaq üçün
         )
         return connection
@@ -171,11 +170,12 @@ def update_guild_data(guild_id: int, key: str, value):
         conn.close()
 
 
+# --- INTENTS (İCAZƏLƏR) YENİLƏNMƏSİ ---
 intents = discord.Intents.default()
-intents.members = True
-intents.moderation = True
-intents.message_content = True
-intents.guilds = True
+intents.members = True          # Üzvlərin giriş/çıxışını izləmək üçün (Mütləqdir!)
+intents.moderation = True       # Ban hadisələrini (on_member_ban) eşitmək üçün (Mütləqdir!)
+intents.guilds = True           # Server kanalları və rollarını izləmək üçün
+intents.message_content = True  # Mesajları oxuyub spam qorumaq üçün
 
 # --- POP-UP MODAL (LİMİTLƏRİ AYARLAMAQ ÜÇÜN PƏNCƏRƏ) ---
 
@@ -360,7 +360,7 @@ async def punish_user(guild: discord.Guild, member: discord.Member, reason: str,
     roles_removed = False
     if remove_roles:
         try:
-            roles_to_remove = [role for role in member.roles if not role.is_default()]
+            roles_to_remove = [role for role in member.roles if not role.is_default() and role.position < guild.me.top_role.position]
             if roles_to_remove:
                 await member.remove_roles(*roles_to_remove, reason=f"Anti-Nuke: {reason}")
                 roles_removed = True
@@ -421,6 +421,7 @@ whitelist_group = app_commands.Group(name="whitelist", description="Bu server ü
 @whitelist_group.command(name="add", description="Bir istifadəçini whitelist-ə əlavə edir.")
 @app_commands.checks.has_permissions(administrator=True)
 async def wl_add(interaction: discord.Interaction, user: discord.User):
+    await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
     gdata = get_guild_data(guild_id)
     
@@ -430,11 +431,12 @@ async def wl_add(interaction: discord.Interaction, user: discord.User):
         embed = discord.Embed(description=f"✅ {user.mention} bu server üçün Whitelist-ə əlavə edildi.", color=discord.Color.green())
     else:
         embed = discord.Embed(description=f"ℹ️ {user.mention} artıq bu serverdə whitelist-dədir.", color=discord.Color.blue())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 @whitelist_group.command(name="remove", description="Bir istifadəçini whitelist-dən çıxarır.")
 @app_commands.checks.has_permissions(administrator=True)
 async def wl_remove(interaction: discord.Interaction, user: discord.User):
+    await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
     gdata = get_guild_data(guild_id)
     
@@ -444,7 +446,7 @@ async def wl_remove(interaction: discord.Interaction, user: discord.User):
         embed = discord.Embed(description=f"❌ {user.mention} bu server üçün Whitelist-dən çıxarıldı.", color=discord.Color.red())
     else:
         embed = discord.Embed(description=f"⚠️ {user.mention} bu serverin whitelist-ində yoxdur.", color=discord.Color.orange())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 
 staff_group = app_commands.Group(name="staffrole", description="Anti-nuke bildirişi alacaq server rəhbərliyi rolları")
@@ -452,6 +454,7 @@ staff_group = app_commands.Group(name="staffrole", description="Anti-nuke bildir
 @staff_group.command(name="add", description="Cəza anında pinglənəcək rolu əlavə edir.")
 @app_commands.checks.has_permissions(administrator=True)
 async def staff_add(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
     gdata = get_guild_data(guild_id)
     
@@ -461,11 +464,12 @@ async def staff_add(interaction: discord.Interaction, role: discord.Role):
         embed = discord.Embed(description=f"✅ {role.mention} rolu bu serverin bildiriş siyahısına əlavə olundu.", color=discord.Color.green())
     else:
         embed = discord.Embed(description=f"ℹ️ Bu rol artıq bu server üçün siyahıda var.", color=discord.Color.blue())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 @staff_group.command(name="remove", description="Bildiriş alacaq rolu siyahıdan silir.")
 @app_commands.checks.has_permissions(administrator=True)
 async def staff_remove(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
     gdata = get_guild_data(guild_id)
     
@@ -475,13 +479,14 @@ async def staff_remove(interaction: discord.Interaction, role: discord.Role):
         embed = discord.Embed(description=f"❌ {role.mention} rolu bildiriş siyahısından silindi.", color=discord.Color.red())
     else:
         embed = discord.Embed(description=f"⚠️ Bu rol onsuz da siyahıda yoxdur.", color=discord.Color.orange())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="panel", description="Anti-Nuke idarəetmə panelini açar (Düyməli).")
 @app_commands.guild_only()
 @app_commands.checks.has_permissions(administrator=True)
 async def open_panel(interaction: discord.Interaction):
+    # Dondurmamaq üçün əvvəlcədən dərhal defer edirik
     await interaction.response.defer(ephemeral=True)
     
     guild_id = interaction.guild_id
@@ -504,6 +509,7 @@ async def open_panel(interaction: discord.Interaction):
     )
     embed.add_field(name="📊 Cari Limitlər", value=limit_info, inline=False)
     
+    # Defer etdiyimiz üçün mütləq followup ilə göndəririk
     await interaction.followup.send(embed=embed, view=ControlPanelView())
 
 
@@ -616,7 +622,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
     if not moderator or moderator.id == bot.user.id:
         return
 
-    # 3. İdarəçi, dev və ya whitelist-dirsə toxunmuruq
+    # 3. İdarəçi, dev və ya whitelist-dirsə toxunmuruq (Sınaq zamanı buna mütləq diqqət et!)
     if moderator.id == guild.owner_id or moderator.id == DEVELOPER_ID or is_whitelisted(guild.id, moderator.id):
         return
 
@@ -658,7 +664,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
             )
         bot.ban_counter[key].clear()
     
-    # 5. Limit aşılmayıbsa, log kanalına xəbərdarlıq göndəririk
+    # 5. Limit aşılmayıbsa, log kanalına dərhal xəbərdarlıq atırıq (Hər ban atılanda bura işləyəcək!)
     else:
         qalan = limit_val - cari_say
         embed = discord.Embed(
