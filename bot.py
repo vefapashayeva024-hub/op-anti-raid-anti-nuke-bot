@@ -2,8 +2,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import datetime
-import json
 import os
+import pymongo  # MongoDB üçün lazımdır
 from flask import Flask
 from threading import Thread
 
@@ -24,30 +24,30 @@ def run():
 def keep_alive(): 
     Thread(target=run).start()
 
-# --- MULTI-SERVER JSON VERİLƏNLƏR BAZASI ---
-DATA_FILE = "data.json"
+# --- MONGODB BAĞLANTISI ---
+# Render-da Environment Variables bölməsində MONGO_URI dəyişənini təyin edəcəyik.
+MONGO_URI = os.environ.get("MONGO_URI", "SƏNİN_MONGODB_KOPYALADIĞIN_LINK_BURA")
 
-def load_all_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w") as f:
-            json.dump({}, f, indent=4)
-        return {}
-    with open(DATA_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+try:
+    mongo_client = pymongo.MongoClient(MONGO_URI)
+    db = mongo_client["anti_nuke_database"]
+    collection = db["guild_settings"]
+    print("✅ MongoDB Verilənlər Bazasına uğurla qoşulduq!")
+except Exception as e:
+    print(f"❌ Verilənlər bazasına qoşularkən xəta: {e}")
 
-def save_all_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+# --- MULTI-SERVER MONGODB FUNKSİYALARI (Köhnə JSON yerinə) ---
 
 def get_guild_data(guild_id: int):
-    data = load_all_data()
     guild_key = str(guild_id)
     
-    if guild_key not in data:
-        data[guild_key] = {
+    # Bazadan həmin serverin məlumatını axtarırıq
+    data = collection.find_one({"guild_id": guild_key})
+    
+    # Əgər server ilk dəfə botu işlədirsə (data.json-da yaradıldığı kimi), avtomatik şablon yaradırıq
+    if not data:
+        default_data = {
+            "guild_id": guild_key,
             "whitelist": [],
             "notification_roles": [],
             "log_channel_id": None,
@@ -58,8 +58,11 @@ def get_guild_data(guild_id: int):
             "limit_channel_delete": 3,
             "limit_everyone": 2
         }
-        save_all_data(data)
+        collection.insert_one(default_data)
+        return default_data
     
+    # Əgər sonradan yeni limit ayarları gəlibsə və köhnə server məlumatında yoxdursa, avtomatik əlavə edirik
+    updated = False
     for key, default_val in [
         ("limit_ban", 3), 
         ("limit_kick", 3), 
@@ -67,22 +70,24 @@ def get_guild_data(guild_id: int):
         ("limit_channel_delete", 3), 
         ("limit_everyone", 2)
     ]:
-        if key not in data[guild_key]:
-            data[guild_key][key] = default_val
-            save_all_data(data)
+        if key not in data:
+            data[key] = default_val
+            updated = True
             
-    return data[guild_key]
+    if updated:
+        collection.replace_one({"guild_id": guild_key}, data)
+            
+    return data
 
 def update_guild_data(guild_id: int, key: str, value):
-    data = load_all_data()
     guild_key = str(guild_id)
     
-    if guild_key not in data:
-        get_guild_data(guild_id) 
-        data = load_all_data()
-        
-    data[guild_key][key] = value
-    save_all_data(data)
+    # Lazımi dəyişən açarı (key) bazada yeniləyirik (yoxdursa yaradırıq)
+    collection.update_one(
+        {"guild_id": guild_key},
+        {"$set": {key: value}},
+        upsert=True
+    )
 
 
 intents = discord.Intents.default()
@@ -103,7 +108,7 @@ class AntiNukeBot(commands.Bot):
         self.join_tracker = {}         
 
     async def setup_hook(self):
-        load_all_data()
+        # Köhnə load_all_data() artıq lazım deyil, çünki hər şey birbaşa MongoDB ilə idarə olunur
         self.tree.add_command(whitelist_group)
         self.tree.add_command(staff_group)
         await self.tree.sync()
@@ -278,10 +283,8 @@ async def punish_user(guild: discord.Guild, member: discord.Member, reason: str,
             print(f"❌ Rol silərkən xəta baş verdi: {e} (Görünür botun rolu bu istifadəçidən aşağıdadır)")
 
     try:
-        # Zaman aralığını dəqiq hesablayırıq
         duration = datetime.timedelta(days=duration_days, hours=duration_hours)
         
-        # Əgər həm gün, həm saat 0-dırsa, ehtiyat olaraq 1 saatlıq mute atırıq
         if duration.total_seconds() == 0:
             duration = datetime.timedelta(hours=1)
             
@@ -487,13 +490,11 @@ async def on_message(message: discord.Message):
         replied_to_user = message.reference.cached_message.author
         mentions = [m for m in mentions if m.id != replied_to_user.id]
 
-    # Burada mass ping üçün şərti 1-dən çox olan pingleşmələrdə tətbiq edirik
     if len(mentions) > 1:
         try:
             await message.delete()
         except:
             pass
-        # DÜZƏLİŞ: Tam olaraq 1 saatlıq mute atır, rolları almır
         await punish_user(
             guild=message.guild, 
             member=message.author, 
