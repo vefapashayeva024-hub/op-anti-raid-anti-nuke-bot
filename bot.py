@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import datetime
 import os
+import asyncio  # Mobil gecikmələrinin qarşısını almaq üçün mütləqdir
 import psycopg2  # PostgreSQL qoşulması üçün
 from psycopg2.extras import RealDictCursor
 from flask import Flask
@@ -225,6 +226,7 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
         self.everyone_input.default = str(current_limits.get("limit_everyone", 2))
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         try:
             b_lim = int(self.ban_input.value)
             k_lim = int(self.kick_input.value)
@@ -233,15 +235,15 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             e_lim = int(self.everyone_input.value)
             
             if b_lim <= 0 or k_lim <= 0 or r_lim <= 0 or c_lim <= 0 or e_lim <= 0:
-                await interaction.response.send_message("❌ Limit dəyərləri 0-dan böyük olmalıdır!", ephemeral=True)
+                await interaction.followup.send("❌ Limit dəyərləri 0-dan böyük olmalıdır!", ephemeral=True)
                 return
                 
             guild_id = interaction.guild_id
-            update_guild_data(guild_id, "limit_ban", b_lim)
-            update_guild_data(guild_id, "limit_kick", k_lim)
-            update_guild_data(guild_id, "limit_role_delete", r_lim)
-            update_guild_data(guild_id, "limit_channel_delete", c_lim)
-            update_guild_data(guild_id, "limit_everyone", e_lim)
+            await asyncio.to_thread(update_guild_data, guild_id, "limit_ban", b_lim)
+            await asyncio.to_thread(update_guild_data, guild_id, "limit_kick", k_lim)
+            await asyncio.to_thread(update_guild_data, guild_id, "limit_role_delete", r_lim)
+            await asyncio.to_thread(update_guild_data, guild_id, "limit_channel_delete", c_lim)
+            await asyncio.to_thread(update_guild_data, guild_id, "limit_everyone", e_lim)
             
             embed = discord.Embed(
                 title="✅ Limitlər Yeniləndi",
@@ -254,10 +256,10 @@ class LimitSettingsModal(discord.ui.Modal, title="⚙️ Anti-Nuke Limitlərini 
             embed.add_field(name="Kanal Silmə Limiti", value=f"{c_lim} dəfə / dəq", inline=True)
             embed.add_field(name="@everyone Limiti", value=f"{e_lim} dəfə / dəq", inline=True)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except ValueError:
-            await interaction.response.send_message("❌ Zəhmət olmasa yalnız düzgün rəqəmlər daxil edin!", ephemeral=True)
+            await interaction.followup.send("❌ Zəhmət olmasa yalnız düzgün rəqəmlər daxil edin!", ephemeral=True)
 
 
 # --- INTERAKTİV UI DÜYMƏLƏRİ (PANEL VIEW) ---
@@ -268,48 +270,52 @@ class ControlPanelView(discord.ui.View):
 
     @discord.ui.button(label="Sistemi Aktiv Et", style=discord.ButtonStyle.success, emoji="🛡️", custom_id="btn_activate")
     async def activate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         if interaction.user.id != DEVELOPER_ID and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Bu düyməni yalnız İdarəçilər istifadə edə bilər!", ephemeral=True)
+            await interaction.followup.send("❌ Bu düyməni yalnız İdarəçilər istifadə edə bilər!", ephemeral=True)
             return
         
         guild_id = interaction.guild_id
-        update_guild_data(guild_id, "is_active", True)
+        await asyncio.to_thread(update_guild_data, guild_id, "is_active", True)
         
         embed = discord.Embed(
             title="🛡️ Anti-Nuke Statusu",
             description="Sistem bu server üçün uğurla **AKTİVLƏŞDİRİLDİ**.\nServer artıq tam qoruma altındadır!",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Sistemi Deaktiv Et", style=discord.ButtonStyle.danger, emoji="🔓", custom_id="btn_deactivate")
     async def deactivate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         if interaction.user.id != DEVELOPER_ID and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Bu düyməni yalnız İdarəçilər istifadə edə bilər!", ephemeral=True)
+            await interaction.followup.send("❌ Bu düyməni yalnız İdarəçilər istifadə edə bilər!", ephemeral=True)
             return
         
         guild_id = interaction.guild_id
-        update_guild_data(guild_id, "is_active", False)
+        await asyncio.to_thread(update_guild_data, guild_id, "is_active", False)
         
         embed = discord.Embed(
             title="🔓 Anti-Nuke Statusu",
             description="Sistem bu server üçün **DEAKTİV EDİLDİ**.\nServer hazırda qorunmur!",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Limitləri Ayarla", style=discord.ButtonStyle.primary, emoji="⚙️", custom_id="btn_set_limits")
     async def set_limits_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Modal açılarkən defer() edilmir, birbaşa modal göndərilir, amma donmanın qarşısını almaq üçün məlumatı sürətlə çəkirik
         if interaction.user.id != DEVELOPER_ID and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Limitləri yalnız İdarəçilər dəyişə bilər!", ephemeral=True)
             return
         
-        gdata = get_guild_data(interaction.guild_id)
+        gdata = await asyncio.to_thread(get_guild_data, interaction.guild_id)
         await interaction.response.send_modal(LimitSettingsModal(current_limits=gdata))
 
     @discord.ui.button(label="Whitelist Göstər", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="btn_whitelist")
     async def whitelist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        gdata = get_guild_data(interaction.guild_id)
+        await interaction.response.defer(ephemeral=True)
+        gdata = await asyncio.to_thread(get_guild_data, interaction.guild_id)
         users_mentions = [f"<@{uid}> (`{uid}`)" for uid in gdata["whitelist"]]
         
         embed = discord.Embed(
@@ -317,7 +323,7 @@ class ControlPanelView(discord.ui.View):
             description="\n".join(users_mentions) if users_mentions else "*Bu server üçün hələ ki whitelist-ə heç kim əlavə edilməyib.*",
             color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 class AntiNukeBot(commands.Bot):
@@ -346,15 +352,15 @@ bot = AntiNukeBot()
 
 # --- KÖMƏKÇİ FUNKSİYALAR ---
 
-def is_whitelisted(guild_id: int, user_id: int) -> bool:
+async def is_whitelisted(guild_id: int, user_id: int) -> bool:
     if user_id == DEVELOPER_ID:
         return True
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     return user_id in gdata["whitelist"]
 
 
 async def punish_user(guild: discord.Guild, member: discord.Member, reason: str, duration_days: int = 25, duration_hours: int = 0, remove_roles: bool = True):
-    if member.id == DEVELOPER_ID or member.id == guild.owner_id or is_whitelisted(guild.id, member.id):
+    if member.id == DEVELOPER_ID or member.id == guild.owner_id or await is_whitelisted(guild.id, member.id):
         return
 
     roles_removed = False
@@ -398,7 +404,7 @@ async def punish_user(guild: discord.Guild, member: discord.Member, reason: str,
     )
 
 async def send_log(guild: discord.Guild, embed: discord.Embed, ping_staff: bool = False, ping_user: discord.Member = None):
-    gdata = get_guild_data(guild.id)
+    gdata = await asyncio.to_thread(get_guild_data, guild.id)
     log_id = gdata.get("log_channel_id")
     if not log_id:
         return
@@ -423,11 +429,11 @@ whitelist_group = app_commands.Group(name="whitelist", description="Bu server ü
 async def wl_add(interaction: discord.Interaction, user: discord.User):
     await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
     if user.id not in gdata["whitelist"]:
         gdata["whitelist"].append(user.id)
-        update_guild_data(guild_id, "whitelist", gdata["whitelist"])
+        await asyncio.to_thread(update_guild_data, guild_id, "whitelist", gdata["whitelist"])
         embed = discord.Embed(description=f"✅ {user.mention} bu server üçün Whitelist-ə əlavə edildi.", color=discord.Color.green())
     else:
         embed = discord.Embed(description=f"ℹ️ {user.mention} artıq bu serverdə whitelist-dədir.", color=discord.Color.blue())
@@ -438,11 +444,11 @@ async def wl_add(interaction: discord.Interaction, user: discord.User):
 async def wl_remove(interaction: discord.Interaction, user: discord.User):
     await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
     if user.id in gdata["whitelist"]:
         gdata["whitelist"].remove(user.id)
-        update_guild_data(guild_id, "whitelist", gdata["whitelist"])
+        await asyncio.to_thread(update_guild_data, guild_id, "whitelist", gdata["whitelist"])
         embed = discord.Embed(description=f"❌ {user.mention} bu server üçün Whitelist-dən çıxarıldı.", color=discord.Color.red())
     else:
         embed = discord.Embed(description=f"⚠️ {user.mention} bu serverin whitelist-ində yoxdur.", color=discord.Color.orange())
@@ -456,11 +462,11 @@ staff_group = app_commands.Group(name="staffrole", description="Anti-nuke bildir
 async def staff_add(interaction: discord.Interaction, role: discord.Role):
     await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
     if role.id not in gdata["notification_roles"]:
         gdata["notification_roles"].append(role.id)
-        update_guild_data(guild_id, "notification_roles", gdata["notification_roles"])
+        await asyncio.to_thread(update_guild_data, guild_id, "notification_roles", gdata["notification_roles"])
         embed = discord.Embed(description=f"✅ {role.mention} rolu bu serverin bildiriş siyahısına əlavə olundu.", color=discord.Color.green())
     else:
         embed = discord.Embed(description=f"ℹ️ Bu rol artıq bu server üçün siyahıda var.", color=discord.Color.blue())
@@ -471,11 +477,11 @@ async def staff_add(interaction: discord.Interaction, role: discord.Role):
 async def staff_remove(interaction: discord.Interaction, role: discord.Role):
     await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild_id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
     if role.id in gdata["notification_roles"]:
         gdata["notification_roles"].remove(role.id)
-        update_guild_data(guild_id, "notification_roles", gdata["notification_roles"])
+        await asyncio.to_thread(update_guild_data, guild_id, "notification_roles", gdata["notification_roles"])
         embed = discord.Embed(description=f"❌ {role.mention} rolu bildiriş siyahısından silindi.", color=discord.Color.red())
     else:
         embed = discord.Embed(description=f"⚠️ Bu rol onsuz da siyahıda yoxdur.", color=discord.Color.orange())
@@ -486,11 +492,12 @@ async def staff_remove(interaction: discord.Interaction, role: discord.Role):
 @app_commands.guild_only()
 @app_commands.checks.has_permissions(administrator=True)
 async def open_panel(interaction: discord.Interaction):
-    # Dondurmamaq üçün əvvəlcədən dərhal defer edirik
+    # 1. Mobil üçün dərhal defer edirik
     await interaction.response.defer(ephemeral=True)
     
     guild_id = interaction.guild_id
-    gdata = get_guild_data(guild_id)
+    # 2. Bazadan yükləməni tamamilə asinxron edirik
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
     embed = discord.Embed(
         title="⚙️ Anti-Nuke İdarəetmə Paneli",
@@ -509,7 +516,6 @@ async def open_panel(interaction: discord.Interaction):
     )
     embed.add_field(name="📊 Cari Limitlər", value=limit_info, inline=False)
     
-    # Defer etdiyimiz üçün mütləq followup ilə göndəririk
     await interaction.followup.send(embed=embed, view=ControlPanelView())
 
 
@@ -520,7 +526,7 @@ async def set_log(interaction: discord.Interaction, channel: discord.TextChannel
     await interaction.response.defer(ephemeral=True)
     
     guild_id = interaction.guild_id
-    update_guild_data(guild_id, "log_channel_id", channel.id)
+    await asyncio.to_thread(update_guild_data, guild_id, "log_channel_id", channel.id)
     
     embed = discord.Embed(
         title="📝 Log Kanalı Təyin Edildi",
@@ -538,9 +544,9 @@ async def on_message(message: discord.Message):
         return
         
     guild_id = message.guild.id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     
-    if not gdata["is_active"] or is_whitelisted(guild_id, message.author.id):
+    if not gdata["is_active"] or await is_whitelisted(guild_id, message.author.id):
         return
 
     # A) @everyone / @here Limiti
@@ -604,7 +610,7 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_member_ban(guild: discord.Guild, user: discord.User):
     # 1. Sistem aktivdirmi yoxlayırıq
-    gdata = get_guild_data(guild.id)
+    gdata = await asyncio.to_thread(get_guild_data, guild.id)
     if not gdata.get("is_active"):
         return
 
@@ -623,7 +629,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         return
 
     # 3. İdarəçi, dev və ya whitelist-dirsə toxunmuruq (Sınaq zamanı buna mütləq diqqət et!)
-    if moderator.id == guild.owner_id or moderator.id == DEVELOPER_ID or is_whitelisted(guild.id, moderator.id):
+    if moderator.id == guild.owner_id or moderator.id == DEVELOPER_ID or await is_whitelisted(guild.id, moderator.id):
         return
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -684,14 +690,14 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
 async def on_member_remove(member: discord.Member):
     guild = member.guild
     guild_id = guild.id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     if not gdata["is_active"]:
         return
 
     async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
         if entry.target.id == member.id:
             moderator = entry.user
-            if is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
+            if await is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
                 return
 
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -723,13 +729,13 @@ async def on_member_remove(member: discord.Member):
 async def on_guild_role_delete(role: discord.Role):
     guild = role.guild
     guild_id = guild.id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     if not gdata["is_active"]:
         return
 
     async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
         moderator = entry.user
-        if is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
+        if await is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
             return
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -761,13 +767,13 @@ async def on_guild_role_delete(role: discord.Role):
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
     guild = channel.guild
     guild_id = guild.id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     if not gdata["is_active"]:
         return
 
     async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
         moderator = entry.user
-        if is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
+        if await is_whitelisted(guild_id, moderator.id) or moderator.id == bot.user.id:
             return
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -799,14 +805,14 @@ async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
 async def on_member_join(member: discord.Member):
     guild = member.guild
     guild_id = guild.id
-    gdata = get_guild_data(guild_id)
+    gdata = await asyncio.to_thread(get_guild_data, guild_id)
     if not gdata["is_active"]:
         return
 
     if member.bot:
         async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
             inviter = entry.user
-            if not is_whitelisted(guild_id, inviter.id):
+            if not await is_whitelisted(guild_id, inviter.id):
                 try:
                     await member.ban(reason="İcazəsiz bot girişi.")
                 except Exception as e:
