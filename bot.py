@@ -605,14 +605,14 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
     # 2. Banı kimin atdığını tapmaq üçün Audit Log-u çəkirik
     moderator = None
     try:
-        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+        async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.ban):
             if entry.target.id == user.id:
                 moderator = entry.user
                 break
     except Exception as e:
         print(f"⚠️ Audit log oxunarkən xəta: {e}")
-        return
 
+    # Əgər moderator tapılmadısa və ya banı bot özü atıbsa, dayanırıq
     if not moderator or moderator.id == bot.user.id:
         return
 
@@ -632,22 +632,46 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         if (now - t).total_seconds() < 60
     ]
 
-    # Cari banı əlavə edirik
+    # Cari banı siyahıya əlavə edirik
     bot.ban_counter[key].append(now)
 
-    # 5. Limiti yoxlayırıq
-    limit = gdata.get("limit_ban", 3)
-    if len(bot.ban_counter[key]) >= limit:
+    cari_say = len(bot.ban_counter[key])
+    limit_val = gdata.get("limit_ban", 3)
+
+    # 4. Limit aşımı və cəza
+    if cari_say >= limit_val:
         member = guild.get_member(moderator.id)
+        if not member:
+            try:
+                member = await guild.fetch_member(moderator.id)
+            except:
+                pass
+
         if member:
             await punish_user(
                 guild=guild, 
                 member=member, 
-                reason=f"Limit aşımı (60 saniyədə {len(bot.ban_counter[key])} ban atıldı!)"
+                reason=f"Ban limiti aşıldı! (60 saniyədə {cari_say} ban atıldı)",
+                duration_days=25,
+                duration_hours=0,
+                remove_roles=True
             )
+        bot.ban_counter[key].clear()
+    
+    # 5. Limit aşılmayıbsa, log kanalına xəbərdarlıq göndəririk
+    else:
+        qalan = limit_val - cari_say
+        embed = discord.Embed(
+            title="⚠️ WARN (XƏBƏRDARLIQ) - Ban Limiti", 
+            color=discord.Color.orange(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.add_field(name="Moderator", value=moderator.mention, inline=True)
+        embed.add_field(name="Banlanan İstifadəçi", value=f"{user.name} ({user.id})", inline=True)
+        embed.add_field(name="Həyata Keçən Ban", value=f"{cari_say}/{limit_val}", inline=True)
+        embed.add_field(name="Qalan Ban Haqqı", value=f"{qalan} ban", inline=True)
         
-        # Sayğacı təmizləyirik
-        bot.ban_counter[key] = []
+        await send_log(guild, embed=embed, ping_staff=False, ping_user=moderator)
 
 
 @bot.event
